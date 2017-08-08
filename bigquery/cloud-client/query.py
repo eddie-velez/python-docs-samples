@@ -14,42 +14,48 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Command-line application to perform asynchronous queries in BigQuery.
+"""Command-line application to perform queries in BigQuery.
 
 For more information, see the README.rst.
 
 Example invocation:
-    $ python async_query.py \\
-          'SELECT corpus FROM `publicdata.samples.shakespeare` GROUP BY corpus'
+    $ python query.py '#standardSQL
+          SELECT corpus
+          FROM `publicdata.samples.shakespeare`
+          GROUP BY corpus
+          ORDER BY corpus'
 """
 
 import argparse
-import time
 import uuid
 
 from google.cloud import bigquery
 
 
-def wait_for_job(job):
-    while True:
-        job.reload()  # Refreshes the state via a GET request.
-        if job.state == 'DONE':
-            if job.error_result:
-                raise RuntimeError(job.errors)
-            return
-        time.sleep(1)
-
-
-def async_query(query):
+def query(query):
     client = bigquery.Client()
     query_job = client.run_async_query(str(uuid.uuid4()), query)
+    query_job.begin()
+
+    query_job.result()  # Wait for job to complete
+    destination_table = query_job.destination
+    destination_table.reload()
+    for row in destination_table.fetch_data():
+        print(row)
+
+
+def query_standard_sql(query):
+    client = bigquery.Client()
+    query_job = client.run_async_query(str(uuid.uuid4()), query)
+    # Set use_legacy_sql to False to use standard SQL syntax. See:
+    # https://cloud.google.com/bigquery/docs/reference/standard-sql/enabling-standard-sql
     query_job.use_legacy_sql = False
     query_job.begin()
 
-    wait_for_job(query_job)
-
-    rows = query_job.results().fetch_data(max_results=10)
-    for row in rows:
+    query_job.result()  # Wait for job to complete
+    destination_table = query_job.destination
+    destination_table.reload()
+    for row in destination_table.fetch_data():
         print(row)
 
 
@@ -58,7 +64,14 @@ if __name__ == '__main__':
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('query', help='BigQuery SQL Query.')
+    parser.add_argument(
+        '--use_standard_sql',
+        action='store_true',
+        help='Use standard SQL syntax.')
 
     args = parser.parse_args()
 
-    async_query(args.query)
+    if args.use_standard_sql:
+        query_standard_sql(args.query)
+    else:
+        query(args.query)
